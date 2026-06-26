@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Voice agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ── Material 3 (Material You) tokens ─────────────────────────────────────
+     One tonal palette per context: the whole app recolours by data-mode.
+     Neutrals are warm-tinted (never pure #000 / #fff). No shadows, no borders
+     doing the work — tonal contrast separates surfaces. */
+  :root {
+    --bg:              #f4eff4;   /* page canvas */
+    --surface:         #fefbff;   /* cards */
+    --surface-variant: #ece6f0;   /* filled inputs, secondary tiles */
+    --outline:         #cac4d0;
+    --outline-variant: #e7e0ec;
+    --on-surface:      #1c1b1f;
+    --on-surface-var:  #49454f;
+    --overlay:         rgba(0,0,0,.06);
+    --overlay-press:   rgba(0,0,0,.10);
+  }
+  /* ── Status pill colours — EDIT THESE ────────────────────────────────────
+     One colour per conversation state, so you can tell at a glance what's
+     happening. bg = pill fill, fg = pill text. ("You're talking" reuses the
+     listening colours.) */
+  :root {
+    --status-ready-bg:      #e2e0e6;  --status-ready-fg:      #44464e;   /* idle / Ready      */
+    --status-connecting-bg: #ffe1a3;  --status-connecting-fg: #573e00;   /* Connecting        */
+    --status-listening-bg:  #a8f0c0;  --status-listening-fg:  #00391b;   /* Listening / you   */
+    --status-speaking-bg:   #cbe1ff;  --status-speaking-fg:   #00305f;   /* Speaking (agent)  */
+  }
+  /* Interview prep — M3 green family */
+  [data-mode="interview"] {
+    --primary:           #006d3c;
+    --on-primary:        #ffffff;
+    --primary-container: #9bf6bd;
+    --on-primary-cont:   #00210f;
+    --soft:              #eaf6ee;
+  }
+  /* Brainstorm — M3 violet family */
+  [data-mode="brainstorm"] {
+    --primary:           #6750a4;
+    --on-primary:        #ffffff;
+    --primary-container: #e9ddff;
+    --on-primary-cont:   #22005d;
+    --soft:              #f5eefe;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--on-surface);
+    font-family: 'Google Sans', 'Roboto', system-ui, -apple-system, sans-serif;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.45;
+  }
+  .app { max-width: 1080px; margin: 0 auto; padding: 16px; }
+  @media (min-width: 640px) { .app { padding: 32px; } }
+
+  /* Labels — M3 "label small": uppercase, tracked, medium */
+  .label {
+    font-size: 11px; font-weight: 500; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--on-surface-var);
+  }
+
+  /* ── Top bar ─────────────────────────────────────────────────────────── */
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-dot { width: 14px; height: 14px; border-radius: 999px; background: var(--primary); transition: background-color .3s; }
+  .brand h1 { font-size: 20px; font-weight: 500; margin: 0; letter-spacing: -.01em; }
+  .icon-btn {
+    width: 48px; height: 48px; border: 0; border-radius: 999px; background: transparent;
+    color: var(--on-surface-var); display: grid; place-items: center; cursor: pointer;
+    transition: background-color .2s;
+  }
+  .icon-btn:hover { background: var(--overlay); }
+  .icon-btn:active { background: var(--overlay-press); }
+
+  /* ── Cards ───────────────────────────────────────────────────────────── */
+  .card { background: var(--surface); border-radius: 16px; padding: 20px; }
+
+  /* Settings (API key) */
+  .settings { margin-bottom: 24px; }
+  .settings[hidden] { display: none; }
+  .field-label { display: block; margin-bottom: 8px; }
+  .filled-input {
+    width: 100%; padding: 14px 16px; font-size: 16px; font-family: inherit;
+    color: var(--on-surface); background: var(--surface-variant);
+    border: 0; border-radius: 12px; outline: none; transition: box-shadow .15s;
+  }
+  .filled-input::placeholder { color: var(--on-surface-var); }
+  .filled-input:focus { box-shadow: 0 0 0 2px var(--primary); }
+  .help { margin: 10px 2px 0; font-size: 12px; color: var(--on-surface-var); }
+
+  /* ── Segmented control ───────────────────────────────────────────────── */
+  .segmented {
+    display: flex; border: 1px solid var(--outline); border-radius: 999px;
+    overflow: hidden; margin-bottom: 24px;
+  }
+  .segment {
+    flex: 1; padding: 12px 16px; border: 0; background: transparent; cursor: pointer;
+    font-family: inherit; font-size: 14px; font-weight: 500; color: var(--on-surface-var);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: background-color .25s, color .25s;
+  }
+  .segment + .segment { border-left: 1px solid var(--outline); }
+  .segment.is-active { background: var(--primary-container); color: var(--on-primary-cont); }
+  .segment svg { width: 18px; height: 18px; }
+
+  /* ── Hero card (recolours with mode) ─────────────────────────────────── */
+  .hero {
+    background: var(--primary-container); color: var(--on-primary-cont);
+    border-radius: 24px; padding: 28px; margin-bottom: 24px;
+    transition: background-color .3s, color .3s;
+  }
+  .hero-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .hero-top .label { color: var(--on-primary-cont); opacity: .75; }
+  .hero-status { display: inline-flex; align-items: center; gap: 7px; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; background: currentColor; opacity: .5; }
+  [data-state="listening"] .hero-status .dot,
+  [data-state="speaking"]  .hero-status .dot { opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .hero-center { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 26px 0 22px; }
+  .mic {
+    width: 96px; height: 96px; border: 0; border-radius: 999px; cursor: pointer;
+    background: var(--primary); color: var(--on-primary);
+    display: grid; place-items: center; transition: background-color .25s, opacity .2s;
+  }
+  .mic:hover { opacity: .92; }
+  .mic:disabled { cursor: default; opacity: .55; }
+  .mic svg { width: 38px; height: 38px; }
+  .hero-line { margin: 0; font-size: 18px; font-weight: 500; text-align: center; }
+
+  .hero-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .foot-hint { font-size: 12px; opacity: .75; max-width: 60%; }
+  /* Per-state pill colours (data-state lives on .app) */
+  .app[data-state="offline"]    { --pill-bg: var(--status-ready-bg);      --pill-fg: var(--status-ready-fg); }
+  .app[data-state="connecting"] { --pill-bg: var(--status-connecting-bg); --pill-fg: var(--status-connecting-fg); }
+  .app[data-state="listening"]  { --pill-bg: var(--status-listening-bg);  --pill-fg: var(--status-listening-fg); }
+  .app[data-state="speaking"]   { --pill-bg: var(--status-speaking-bg);   --pill-fg: var(--status-speaking-fg); }
+  .status-pill {
+    font-size: 12px; font-weight: 500; padding: 7px 14px; border-radius: 999px;
+    background: var(--pill-bg, var(--overlay)); color: var(--pill-fg, inherit); white-space: nowrap;
+    font-variant-numeric: tabular-nums; transition: background-color .25s, color .25s;
+  }
+
+  /* ── Transcript ──────────────────────────────────────────────────────── */
+  /* Conversation + context: stacked on mobile, 2/3 + 1/3 side by side on desktop */
+  .workspace { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (min-width: 880px) { .workspace { grid-template-columns: 2fr 1fr; gap: 24px; align-items: start; } }
+
+  .transcript { min-height: 160px; max-height: 56vh; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+  .transcript-empty { margin: auto; color: var(--on-surface-var); font-size: 14px; }
+  .turn { display: flex; flex-direction: column; gap: 4px; max-width: 84%; }
+  .turn .who { font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--on-surface-var); padding: 0 4px; }
+  .bubble { padding: 12px 16px; border-radius: 18px; font-size: 15px; }
+  .turn.user { align-self: flex-end; align-items: flex-end; }
+  .turn.user .bubble { background: var(--surface-variant); color: var(--on-surface); border-bottom-right-radius: 6px; }
+  .turn.user.partial .bubble { opacity: .6; }
+  .turn.agent { align-self: flex-start; }
+  .turn.agent .bubble { background: var(--soft); color: var(--on-surface); border-bottom-left-radius: 6px; transition: background-color .3s; }
+  .turn.system { align-self: center; max-width: 100%; }
+  .turn.system .bubble { background: transparent; color: var(--on-surface-var); font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; padding: 2px 8px; }
+  /* Typing indicator (shown in a bubble until its text arrives) */
+  .typing { display: inline-flex; gap: 5px; align-items: center; height: 1.1em; }
+  .typing i { width: 6px; height: 6px; border-radius: 999px; background: currentColor; opacity: .3; animation: blink 1.2s infinite ease-in-out; }
+  .typing i:nth-child(2) { animation-delay: .15s; }
+  .typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes blink { 0%, 70%, 100% { opacity: .25; } 35% { opacity: .85; } }
+
+  /* ── Context panel ───────────────────────────────────────────────────── */
+  .context { display: flex; flex-direction: column; max-height: 56vh; align-self: stretch; }
+  @media (min-width: 880px) { .context { position: sticky; top: 24px; } }
+  .ctx-head { display: flex; align-items: center; gap: 8px; }
+  .ctx-count {
+    font-size: 12px; font-weight: 500; color: var(--on-primary-cont); background: var(--primary-container);
+    padding: 2px 9px; border-radius: 999px; font-variant-numeric: tabular-nums; transition: background-color .3s, color .3s;
+  }
+  .ctx-count:empty { display: none; }
+  .ctx-sub { margin: 6px 2px 14px; font-size: 12px; color: var(--on-surface-var); }
+  .ctx-empty { color: var(--on-surface-var); font-size: 14px; padding: 4px 2px; }
+  .ctx-empty[hidden] { display: none; }
+  .ctx-list { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .ctx-tile {
+    display: flex; align-items: flex-start; gap: 12px;
+    background: var(--surface-variant); border-radius: 14px; padding: 12px 14px; transition: background-color .3s;
+  }
+  .ctx-tile.latest { background: var(--soft); }   /* newest highlighted in the active palette */
+  .ctx-tag {
+    flex: none; margin-top: 1px; font-size: 10px; font-weight: 500; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--on-surface-var); background: var(--overlay); padding: 4px 9px; border-radius: 999px;
+  }
+  .ctx-fact { font-size: 14px; color: var(--on-surface); }
+
+  .page-foot { margin-top: 22px; text-align: center; }
+  .page-foot p { font-size: 12px; color: var(--on-surface-var); margin: 0; }
+</style>
+</head>
+<body>
+<div class="app" id="app" data-mode="brainstorm" data-state="offline">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <h1>Voice agent</h1>
+    </div>
+    <button class="icon-btn" id="settingsBtn" title="API key" aria-label="API key">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </header>
+
+  <section class="settings card" id="settings" hidden>
+    <label class="field-label label" for="key">AssemblyAI API key</label>
+    <input class="filled-input" id="key" type="password" placeholder="Paste your key" autocomplete="off" spellcheck="false" />
+    <p class="help">Stored only in this browser tab. For a real app, mint a short-lived token server-side instead of using the raw key.</p>
+  </section>
+
+  <div class="segmented" role="tablist" aria-label="Mode">
+    <button class="segment is-active" data-target="brainstorm" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>
+      Brainstorm
+    </button>
+    <button class="segment" data-target="interview" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+      Interview prep
+    </button>
+  </div>
+
+  <section class="hero">
+    <div class="hero-top">
+      <span class="label" id="heroMode">BRAINSTORM</span>
+      <span class="label hero-status" id="heroStatus"><span class="dot"></span><span id="heroStatusText">OFFLINE</span></span>
+    </div>
+    <div class="hero-center">
+      <button class="mic" id="micBtn" aria-label="Start session">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+      </button>
+      <p class="hero-line" id="heroLine">Tap to start talking</p>
+    </div>
+    <div class="hero-foot">
+      <span class="foot-hint" id="footHint"></span>
+      <span class="status-pill" id="statusPill">Ready</span>
+    </div>
+  </section>
+
+  <div class="workspace">
+    <section class="transcript card" id="transcript">
+      <div class="transcript-empty" id="emptyState">Your conversation will appear here.</div>
+    </section>
+
+    <section class="card context" id="context">
+      <div class="ctx-head">
+        <span class="label">Context</span>
+        <span class="ctx-count" id="contextCount"></span>
+      </div>
+      <p class="ctx-sub">What the coach picks up as you talk — it notes things on its own.</p>
+      <div class="ctx-empty" id="contextEmpty">Nothing noted yet — keep talking.</div>
+      <div class="ctx-list" id="contextList"></div>
+    </section>
+  </div>
+
+</div>
+
+<script>
+(() => {
+  const RATE = 24000;
+  const VOICE = "ivy";
+  // Turn-taking. vad_threshold: lower = more sensitive to speech, so quiet/trailing words don't
+  // read as a pause (fewer mid-sentence cut-offs); raise if it picks up background noise.
+  // min_silence: ms of silence before your turn can end — raise if it cuts you off, lower if the
+  // agent feels slow. max_silence: hard cap. interrupt_response: lets you barge in.
+  const TURN_DETECTION = { vad_threshold: 0.4, min_silence: 2600, max_silence: 8000, interrupt_response: true };
+
+  // Client-side memory tool: the agent calls this over the WebSocket whenever it learns a
+  // durable fact, and we render it in the Context panel. Pure browser — no server, no extra key.
+  const REMEMBER_TOOL = {
+    type: "function",
+    name: "remember",
+    description: "Record one durable fact worth keeping for the rest of this conversation — about the person, their goal, or the idea, business, trip, or plan under discussion. Call it whenever you learn something concrete: a situation, a number, a constraint, a decision, or an open question. One fact per call.",
+    parameters: {
+      type: "object",
+      properties: {
+        fact: { type: "string", description: "The fact in short third person, e.g. 'Runs a fintech marketing agency, about 800k revenue, flat for 5 years'." },
+        category: { type: "string", enum: ["profile", "idea", "constraint", "risk", "decision", "question"], description: "Which kind of note this is." },
+      },
+      required: ["fact"],
+    },
+  };
+  const MEMORY_NOTE = "\n\nMEMORY (required): You have a remember tool. Every time the person states a concrete fact — about themselves, their business or situation, their goal, a number, a constraint, a decision they've made, or an open question — you MUST call remember to record it, one fact per call, on every turn where you learn something new. Example: if they say they run a fintech marketing agency with flat 100k revenue and want to pivot to defense, call remember separately for the agency, the flat revenue, and the planned pivot. Record facts as well as reply normally. Do not announce that you're taking notes and never mention the tool out loud.";
+  const promptFor = (mode) => MODES[mode].prompt + MEMORY_NOTE;
+
+  // Voice-tuned prompts (mirrors coach.py). Identity first, no markdown, one thing per turn.
+  const MODES = {
+    interview: {
+      name: "interview prep", label: "Interview prep",
+      greeting: "Hey, I'm your interview coach. Tell me the role you're prepping for, and we'll run through some behavioral questions. You can also say switch to brainstorming anytime.",
+      prompt:
+`You are a behavioral interview coach. You run realistic practice for questions like "Tell me about a time you handled conflict," and you coach the candidate to answer using the STAR method: situation, task, action, result.
+
+Run it like a real interview with a coach sitting beside it. Ask one behavioral question, let the candidate answer all the way through, then give short, specific feedback before the next question. Never stack two questions in one turn.
+
+Keep every turn to two or three sentences, because this is spoken out loud. When you give feedback, name one concrete thing that worked and one concrete thing to fix, both tied to what they actually said, not generic advice.
+
+Listen for the STAR pieces. If they skip the result, or never separate what they personally did from what the team did, ask them to fill that gap. Push for specifics: their exact role, real numbers, the outcome.
+
+Be warm and direct. Encourage them, but stay honest. If an answer rambled or stayed vague, say so plainly and tell them how to tighten it.
+
+Speak in plain spoken sentences. Round any numbers. Never say "great question," "happy to help," or "as an AI." No lists read aloud, no markdown, no exclamation marks.
+
+If this is the start, ask which role or kind of interview they're preparing for, then ask your first behavioral question. If you just switched into this mode mid-conversation, say one short line to mark the shift, then ask your first question.`
+    },
+    brainstorm: {
+      name: "brainstorming partner", label: "Brainstorm",
+      greeting: "Hey, I'm your brainstorming partner. What's on your mind — a business idea, a trip, a plan? Tell me what you want to dig into. You can also say switch to interview mode anytime.",
+      prompt:
+`You are a sharp brainstorming partner. You help the person explore an idea in more depth than they would on their own: business ideas, personal projects, trips, plans, whatever they bring.
+
+Think with them, do not just agree. Build on what they say, then push: ask the question they are avoiding, surface a tradeoff they skipped, offer an angle they have not considered. Honest pushback is the point. Be candid when something is weak, but stay constructive and keep the energy up.
+
+Keep every turn to two or three sentences, because this is spoken out loud. Move one thought at a time, and usually end on a single pointed question that takes the idea somewhere new, rather than piling on three questions at once.
+
+Go for depth over breadth. When they float an idea, get concrete fast: who is it for, what would it actually take, what is the first real test, what would break it. Offer your own ideas and opinions freely. Suggest concrete options, not vague encouragement.
+
+Be warm but honest. If an idea is vague or the reasoning is thin, say so plainly and help sharpen it.
+
+Speak in plain spoken sentences. Round any numbers. Never say "great idea," "happy to help," or "as an AI." No lists read aloud, no markdown, no exclamation marks.
+
+If this is the start, ask what they want to brainstorm, then dig in. If you just switched into this mode mid-conversation, say one short line to mark the shift, then ask what they want to dig into.`
+    }
+  };
+
+  // Mid-session switch detection — explicit command only (verb + "to" + mode word,
+  // or "<mode> mode/prep"), so an incidental mention doesn't flip modes.
+  const VERB = "(?:switch|change|swap|flip|move|go|jump|put|take)\\w*";
+  const SWITCH_TO = {
+    brainstorm: new RegExp("\\b" + VERB + "\\b[\\w' ]{0,15}?\\bto\\b[\\w' ]{0,15}?\\bbrainstorm|\\bbrainstorm(?:ing)?\\s+mode\\b", "i"),
+    interview:  new RegExp("\\b" + VERB + "\\b[\\w' ]{0,15}?\\bto\\b[\\w' ]{0,15}?\\binterview|\\binterview\\s+(?:prep|practice|mode)\\b", "i"),
+  };
+  const detectSwitch = (text, current) => {
+    for (const t of ["brainstorm", "interview"]) if (t !== current && SWITCH_TO[t].test(text)) return t;
+    return null;
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const app = $("app");
+  let currentMode = "brainstorm";
+  let ws, ctx, stream, node, ready = false, live = false, busy = false;
+  let playhead = 0; const sources = new Set();
+  // One user bubble per turn: the API finalizes a `transcript.user` at every sentence
+  // pause, but they're all the same turn until the agent replies — so we accumulate.
+  let userTurnEl = null, userCommitted = "", agentTurnEl = null;
+  let contextItems = [];   // facts the agent has "remembered" this session
+
+  // ── UI state ────────────────────────────────────────────────────────────
+  const STATES = {
+    offline:    { status: "OFFLINE",    line: "Tap to start talking",   pill: "Ready" },
+    connecting: { status: "CONNECTING", line: "Connecting…",            pill: "Connecting" },
+    listening:  { status: "LISTENING",  line: "Listening — just talk",  pill: "Listening" },
+    speaking:   { status: "SPEAKING",   line: "Coach is talking…",      pill: "Speaking" },
+  };
+  function setState(s, pillOverride) {
+    app.dataset.state = s;
+    const v = STATES[s];
+    $("heroStatusText").textContent = v.status;
+    $("heroLine").textContent = v.line;
+    $("statusPill").textContent = pillOverride || v.pill;
+    $("micBtn").setAttribute("aria-label", live ? "End session" : "Start session");
+  }
+
+  function setMode(target) {
+    if (target === currentMode) return;
+    currentMode = target;
+    app.dataset.mode = target;
+    document.querySelectorAll(".segment").forEach(s =>
+      s.classList.toggle("is-active", s.dataset.target === target));
+    $("heroMode").textContent = MODES[target].label.toUpperCase();
+    if (live && ready && ws && ws.readyState === 1) {
+      // system_prompt is mutable mid-session; resend only that field.
+      ws.send(JSON.stringify({ type: "session.update", session: { system_prompt: promptFor(target) } }));
+      addTurn("system", "Switched to " + MODES[target].name);
+    }
+  }
+
+  // ── Transcript ──────────────────────────────────────────────────────────
+  const TYPING = '<span class="typing"><i></i><i></i><i></i></span>';
+  function setBubbleText(turn, text) {
+    const b = turn.querySelector(".bubble");
+    if (text) b.textContent = text; else b.innerHTML = TYPING;   // empty → animated typing dots
+    turn.classList.toggle("pending", !text);
+  }
+  function addTurn(role, text) {
+    const empty = $("emptyState"); if (empty) empty.remove();
+    const turn = document.createElement("div");
+    turn.className = "turn " + role;
+    if (role !== "system") {
+      const who = document.createElement("div");
+      who.className = "who";
+      who.textContent = role === "user" ? "You" : "Coach";
+      turn.appendChild(who);
+    }
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    turn.appendChild(bubble);
+    setBubbleText(turn, text);
+    const t = $("transcript");
+    t.appendChild(turn);
+    t.scrollTop = t.scrollHeight;
+    return turn;
+  }
+  function ensureUserTurn() { if (!userTurnEl) userTurnEl = addTurn("user", ""); }   // bubble appears immediately
+  function renderUserBubble(partial) {
+    ensureUserTurn();
+    const text = (userCommitted + (partial ? " " + partial : "")).trim();
+    setBubbleText(userTurnEl, text);
+    userTurnEl.classList.toggle("partial", !!partial && !!text);
+    $("transcript").scrollTop = $("transcript").scrollHeight;
+  }
+  function onUserDelta(text) { renderUserBubble(text); }            // live, mid-turn
+  function onUserFinal(text) {                                      // one finalized segment
+    userCommitted = (userCommitted + " " + (text || "")).trim();
+    renderUserBubble("");
+    const target = detectSwitch(userCommitted, currentMode);
+    if (target) setMode(target);
+  }
+  function endUserTurn() {
+    if (userTurnEl && !userCommitted) userTurnEl.remove();   // drop an empty "you" placeholder (false start / no speech)
+    userTurnEl = null; userCommitted = "";
+  }
+
+  // ── Context panel (the agent's "remembered" facts) ───────────────────────
+  function addContext(arg) {
+    const fact = (arg.fact || "").trim();
+    if (!fact) return;
+    if (contextItems.some(i => i.fact.toLowerCase() === fact.toLowerCase())) return;  // skip dupes
+    contextItems.push({ fact, category: arg.category || "profile" });
+    renderContext();
+  }
+  function renderContext() {
+    const list = $("contextList"), empty = $("contextEmpty"), count = $("contextCount");
+    count.textContent = contextItems.length ? String(contextItems.length) : "";
+    list.innerHTML = "";
+    if (!contextItems.length) { empty.hidden = false; return; }
+    empty.hidden = true;
+    contextItems.forEach((item, i) => {
+      const tile = document.createElement("div");
+      tile.className = "ctx-tile" + (i === contextItems.length - 1 ? " latest" : "");
+      const tag = document.createElement("span"); tag.className = "ctx-tag"; tag.textContent = item.category;
+      const txt = document.createElement("span"); txt.className = "ctx-fact"; txt.textContent = item.fact;
+      tile.append(tag, txt);
+      list.appendChild(tile);
+    });
+    list.lastChild.scrollIntoView({ block: "nearest" });
+  }
+
+  // ── Audio playback (PCM16 @ 24k) with barge-in flush ─────────────────────
+  function play(b64) {
+    const raw = atob(b64), pcm = new Int16Array(raw.length / 2);
+    for (let i = 0; i < pcm.length; i++) pcm[i] = raw.charCodeAt(2*i) | (raw.charCodeAt(2*i+1) << 8);
+    const buf = ctx.createBuffer(1, pcm.length, RATE), ch = buf.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+    const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+    const at = Math.max(ctx.currentTime, playhead); src.start(at); playhead = at + buf.duration;
+    sources.add(src); src.onended = () => sources.delete(src);
+  }
+  function flush() {
+    for (const s of sources) { try { s.onended = null; s.stop(); } catch (e) {} }
+    sources.clear(); playhead = ctx ? ctx.currentTime : 0;
+  }
+
+  // ── Session lifecycle ────────────────────────────────────────────────────
+  function sessionConfig(mode) {
+    return { system_prompt: promptFor(mode), greeting: MODES[mode].greeting,
+             output: { voice: VOICE }, input: { turn_detection: TURN_DETECTION }, tools: [REMEMBER_TOOL] };
+  }
+
+  const WORKLET =
+    "class P extends AudioWorkletProcessor{process(i){const c=i[0][0];" +
+    "if(c){const b=new Int16Array(c.length);for(let n=0;n<c.length;n++)" +
+    "b[n]=Math.max(-1,Math.min(1,c[n]))*32767;this.port.postMessage(b.buffer,[b.buffer]);}" +
+    "return true;}}registerProcessor('cap',P);";
+
+  async function start() {
+    const key = $("key").value.trim();
+    if (!key) { openSettings(); $("key").focus(); return; }
+    busy = true; setState("connecting");
+    contextItems = []; renderContext();   // fresh memory each session
+    try {
+      ctx = new AudioContext({ sampleRate: RATE });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true },
+      });
+      await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
+      node = new AudioWorkletNode(ctx, "cap");
+      ctx.createMediaStreamSource(stream).connect(node);
+
+      const url = new URL("wss://agents.assemblyai.com/v1/ws");
+      url.searchParams.set("token", key);
+      ws = new WebSocket(url);
+      live = true; busy = false;
+
+      ws.onopen = () => ws.send(JSON.stringify({ type: "session.update", session: sessionConfig(currentMode) }));
+      node.port.onmessage = (e) => {
+        if (!ready || !ws || ws.readyState !== 1) return;
+        const b = new Uint8Array(e.data); let s = "";
+        for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+        ws.send(JSON.stringify({ type: "input.audio", audio: btoa(s) }));
+      };
+      ws.onmessage = onMessage;
+      ws.onerror = () => { $("footHint").textContent = "Connection error — check your key, and use Chrome or Edge."; };
+      ws.onclose = () => teardown();
+    } catch (err) {
+      busy = false; live = false; setState("offline");
+      $("footHint").textContent = "Mic blocked or unavailable: " + (err && err.message ? err.message : err);
+    }
+  }
+
+  function onMessage({ data }) {
+    const m = JSON.parse(data);
+    switch (m.type) {
+      case "session.ready":
+        ready = true; playhead = ctx.currentTime; setState("listening"); break;
+      case "input.speech.started":
+        flush(); ensureUserTurn(); setState("listening", "You're talking"); break;   // barge-in + show we're hearing you
+      case "transcript.user.delta":
+        onUserDelta(m.text || ""); break;
+      case "transcript.user":
+        onUserFinal(m.text || ""); break;
+      case "reply.started":
+        endUserTurn(); setState("speaking");
+        agentTurnEl = addTurn("agent", "");   // bubble appears (typing) the moment the agent starts speaking
+        break;
+      case "reply.audio":
+        play(m.data); break;
+      case "transcript.agent":
+        // The API delivers the agent's text in one piece (no word-level deltas), so we drop it
+        // into the bubble that's been showing the typing indicator while it spoke.
+        if (agentTurnEl) setBubbleText(agentTurnEl, m.text || "");
+        else addTurn("agent", m.text || "");
+        break;
+      case "reply.done":
+        if (m.status === "interrupted") flush();
+        if (agentTurnEl && agentTurnEl.classList.contains("pending")) agentTurnEl.remove();  // cut off before any text
+        agentTurnEl = null;
+        if (live) setState("listening");
+        break;
+      case "tool.call":
+        if (m.name === "remember") addContext(m.arguments || {});   // arguments is already an object
+        // Ack immediately. result must be a JSON string; echo the original call_id.
+        if (ws && ws.readyState === 1)
+          ws.send(JSON.stringify({ type: "tool.result", call_id: m.call_id, result: JSON.stringify({ ok: true }) }));
+        break;
+      case "session.error":
+      case "error":
+        $("footHint").textContent = "Error: " + (m.message || m.code || "unknown");
+        break;
+    }
+  }
+
+  function stop() {
+    try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "session.end" })); } catch (e) {}
+    if (ws) try { ws.close(); } catch (e) {}
+    teardown();
+  }
+  function teardown() {
+    ready = false; live = false; busy = false;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (ctx) { try { ctx.close(); } catch (e) {} ctx = null; }
+    sources.clear(); userTurnEl = null; userCommitted = ""; agentTurnEl = null;
+    setState("offline");
+  }
+
+  // ── Wiring ────────────────────────────────────────────────────────────────
+  function openSettings() { $("settings").hidden = false; }
+  $("settingsBtn").onclick = () => { $("settings").hidden = !$("settings").hidden; };
+  $("micBtn").onclick = () => { if (busy) return; live ? stop() : start(); };
+  document.querySelectorAll(".segment").forEach(s => {
+    s.onclick = () => setMode(s.dataset.target);
+  });
+
+  // Remember the key locally for convenience (same security caveat as in settings).
+  const saved = localStorage.getItem("aai_key"); if (saved) $("key").value = saved;
+  $("key").addEventListener("change", () => localStorage.setItem("aai_key", $("key").value.trim()));
+
+  setState("offline");
+})();
+</script>
+</body>
+</html>

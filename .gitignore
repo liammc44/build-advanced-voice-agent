@@ -1,6 +1,9 @@
 # Secrets — never commit your real API key
 .env
 
+# macOS
+.DS_Store
+
 # Python
 .venv/
 __pycache__/

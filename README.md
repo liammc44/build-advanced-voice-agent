@@ -1,7 +1,7 @@
 # Build an advanced voice agent
 
 A voice agent that you can talk to and explore different idea, which was built using
-[AssemblyAI's Voice Agent API](https://www.assemblyai.com/docs/voice-agents/voice-agent-api)
+[AssemblyAI's Voice Agent API](https://www.assemblyai.com/docs/voice-agents/voice-agent-api?utm_source=newsletter&utm_medium=influencer&utm_campaign=loop&utm_content=u35_realtime)
 with the Universal-3.5 Pro Realtime speech model.
 
 ![Voice agent](assets/voice-agent-thumbnail.webp)

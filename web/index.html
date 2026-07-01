@@ -86,10 +86,11 @@
   /* ── Cards ───────────────────────────────────────────────────────────── */
   .card { background: var(--surface); border-radius: 16px; padding: 20px; }
 
-  /* Settings (API key) */
+  /* Settings (API keys) */
   .settings { margin-bottom: 24px; }
   .settings[hidden] { display: none; }
-  .field-label { display: block; margin-bottom: 8px; }
+  .field-label { display: block; margin: 0 0 8px; }
+  .field + .field { margin-top: 16px; }
   .filled-input {
     width: 100%; padding: 14px 16px; font-size: 16px; font-family: inherit;
     color: var(--on-surface); background: var(--surface-variant);
@@ -97,7 +98,8 @@
   }
   .filled-input::placeholder { color: var(--on-surface-var); }
   .filled-input:focus { box-shadow: 0 0 0 2px var(--primary); }
-  .help { margin: 10px 2px 0; font-size: 12px; color: var(--on-surface-var); }
+  .help { margin: 14px 2px 0; font-size: 12px; color: var(--on-surface-var); }
+  .help a { color: var(--primary); }
 
   /* ── Segmented control ───────────────────────────────────────────────── */
   .segmented {
@@ -212,15 +214,25 @@
       <span class="brand-dot"></span>
       <h1>Voice agent</h1>
     </div>
-    <button class="icon-btn" id="settingsBtn" title="API key" aria-label="API key">
+    <button class="icon-btn" id="settingsBtn" title="API keys" aria-label="API keys">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
   </header>
 
   <section class="settings card" id="settings" hidden>
-    <label class="field-label label" for="key">AssemblyAI API key</label>
-    <input class="filled-input" id="key" type="password" placeholder="Paste your key" autocomplete="off" spellcheck="false" />
-    <p class="help">Stored only in this browser tab. For a real app, mint a short-lived token server-side instead of using the raw key.</p>
+    <div class="field">
+      <label class="field-label label" for="aaiKey">AssemblyAI API key — speech-to-text</label>
+      <input class="filled-input" id="aaiKey" type="password" placeholder="Paste your AssemblyAI key" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="field">
+      <label class="field-label label" for="anthropicKey">Anthropic API key — Claude (the coach's brain)</label>
+      <input class="filled-input" id="anthropicKey" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="field">
+      <label class="field-label label" for="cartesiaKey">Cartesia API key — the voice (free tier at cartesia.ai)</label>
+      <input class="filled-input" id="cartesiaKey" type="password" placeholder="Paste your Cartesia key (sk_car_…)" autocomplete="off" spellcheck="false" />
+    </div>
+    <p class="help">Keys are stored only in this browser, on this device, and sent only to AssemblyAI / Anthropic / Cartesia. They are never sent anywhere else. For a deployed app, mint short-lived tokens server-side instead of using raw keys.</p>
   </section>
 
   <div class="segmented" role="tablist" aria-label="Mode">
@@ -271,33 +283,40 @@
 
 <script>
 (() => {
-  const RATE = 24000;
-  const VOICE = "ivy";
-  // Turn-taking. vad_threshold: lower = more sensitive to speech, so quiet/trailing words don't
-  // read as a pause (fewer mid-sentence cut-offs); raise if it picks up background noise.
-  // min_silence: ms of silence before your turn can end — raise if it cuts you off, lower if the
-  // agent feels slow. max_silence: hard cap. interrupt_response: lets you barge in.
-  const TURN_DETECTION = { vad_threshold: 0.4, min_silence: 2600, max_silence: 8000, interrupt_response: true };
+  // ════════════════════════════════════════════════════════════════════════
+  //  Pipeline:  mic ─► AssemblyAI Streaming STT (Universal-3.5 Pro)
+  //                 ─► Claude (the coach's brain, streamed)
+  //                 ─► Cartesia TTS ─► speakers
+  //  Everything runs in the browser. Three keys are pasted into Settings.
+  //  (For a deployed app you'd mint short-lived tokens server-side.)
+  // ════════════════════════════════════════════════════════════════════════
 
-  // Client-side memory tool: the agent calls this over the WebSocket whenever it learns a
-  // durable fact, and we render it in the Context panel. Pure browser — no server, no extra key.
-  const REMEMBER_TOOL = {
-    type: "function",
-    name: "remember",
-    description: "Record one durable fact worth keeping for the rest of this conversation — about the person, their goal, or the idea, business, trip, or plan under discussion. Call it whenever you learn something concrete: a situation, a number, a constraint, a decision, or an open question. One fact per call.",
-    parameters: {
-      type: "object",
-      properties: {
-        fact: { type: "string", description: "The fact in short third person, e.g. 'Runs a fintech marketing agency, about 800k revenue, flat for 5 years'." },
-        category: { type: "string", enum: ["profile", "idea", "constraint", "risk", "decision", "question"], description: "Which kind of note this is." },
-      },
-      required: ["fact"],
-    },
-  };
-  const MEMORY_NOTE = "\n\nMEMORY (required): You have a remember tool. Every time the person states a concrete fact — about themselves, their business or situation, their goal, a number, a constraint, a decision they've made, or an open question — you MUST call remember to record it, one fact per call, on every turn where you learn something new. Example: if they say they run a fintech marketing agency with flat 100k revenue and want to pivot to defense, call remember separately for the agency, the flat revenue, and the planned pivot. Record facts as well as reply normally. Do not announce that you're taking notes and never mention the tool out loud.";
-  const promptFor = (mode) => MODES[mode].prompt + MEMORY_NOTE;
+  // ── Tunables ──────────────────────────────────────────────────────────────
+  const AAI_WS = "wss://streaming.assemblyai.com/v3/ws";
+  const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
-  // Voice-tuned prompts (mirrors coach.py). Identity first, no markdown, one thing per turn.
+  // The coach's brain. sonnet-4-6 = good latency/quality balance for voice.
+  // claude-opus-4-8 is smarter but slower; claude-haiku-4-5 is fastest.
+  const LLM_MODEL = "claude-sonnet-4-6";
+  const EXTRACT_MODEL = "claude-haiku-4-5";   // cheap/fast model for the Context panel
+  const REPLY_MAX_TOKENS = 300;               // replies are 2–3 spoken sentences
+
+  // AssemblyAI Universal-3.5 Pro Realtime knobs (the brief's demo features).
+  const SPEECH_MODEL = "universal-3-5-pro";
+  const VOICE_FOCUS  = "near-field";          // near-field (headset/phone) | far-field (room)
+  const FORMAT_TURNS = true;                   // punctuation/casing/ITN + email normalisation on finals
+  const KEYTERMS     = [];                     // e.g. ["AssemblyAI","Vercel"] — boosts rare words
+  // End-of-turn detection. Raise the silences if it cuts you off mid-thought.
+  const MIN_TURN_SILENCE = 560;               // ms (default 400)
+  const MAX_TURN_SILENCE = 2400;              // ms hard cap (default 1280)
+
+  // Voice — Cartesia (Sonic) TTS: reliable free tier, browser-callable, low latency, natural voices.
+  const CARTESIA_MODEL = "sonic-3.5";
+  const CARTESIA_VERSION = "2026-03-01";
+  const CARTESIA_VOICE = "b7d50908-b17c-442d-ad8d-810c63997ed9";   // "California Girl" — US female. Change to any Voice ID from Cartesia → Voices
+  const TTS_RATE = 24000;                      // we request pcm_f32le @ 24 kHz
+
+  // ── Modes (the coach's two personalities) ─────────────────────────────────
   const MODES = {
     interview: {
       name: "interview prep", label: "Interview prep",
@@ -313,9 +332,7 @@ Listen for the STAR pieces. If they skip the result, or never separate what they
 
 Be warm and direct. Encourage them, but stay honest. If an answer rambled or stayed vague, say so plainly and tell them how to tighten it.
 
-Speak in plain spoken sentences. Round any numbers. Never say "great question," "happy to help," or "as an AI." No lists read aloud, no markdown, no exclamation marks.
-
-If this is the start, ask which role or kind of interview they're preparing for, then ask your first behavioral question. If you just switched into this mode mid-conversation, say one short line to mark the shift, then ask your first question.`
+Speak in plain spoken sentences. Round any numbers. Never say "great question," "happy to help," or "as an AI." No lists read aloud, no markdown, no exclamation marks. Keep replies to two or three short sentences.`
     },
     brainstorm: {
       name: "brainstorming partner", label: "Brainstorm",
@@ -331,14 +348,12 @@ Go for depth over breadth. When they float an idea, get concrete fast: who is it
 
 Be warm but honest. If an idea is vague or the reasoning is thin, say so plainly and help sharpen it.
 
-Speak in plain spoken sentences. Round any numbers. Never say "great idea," "happy to help," or "as an AI." No lists read aloud, no markdown, no exclamation marks.
-
-If this is the start, ask what they want to brainstorm, then dig in. If you just switched into this mode mid-conversation, say one short line to mark the shift, then ask what they want to dig into.`
+Speak in plain spoken sentences. Round any numbers. Never say "great idea," "happy to help," or "as an AI." No lists read aloud, no markdown, no exclamation marks. Keep replies to two or three short sentences.`
     }
   };
+  const systemFor = (mode) => MODES[mode].prompt;
 
-  // Mid-session switch detection — explicit command only (verb + "to" + mode word,
-  // or "<mode> mode/prep"), so an incidental mention doesn't flip modes.
+  // Mid-session switch detection — explicit command only (verb + "to" + mode word).
   const VERB = "(?:switch|change|swap|flip|move|go|jump|put|take)\\w*";
   const SWITCH_TO = {
     brainstorm: new RegExp("\\b" + VERB + "\\b[\\w' ]{0,15}?\\bto\\b[\\w' ]{0,15}?\\bbrainstorm|\\bbrainstorm(?:ing)?\\s+mode\\b", "i"),
@@ -349,15 +364,23 @@ If this is the start, ask what they want to brainstorm, then dig in. If you just
     return null;
   };
 
+  // ── State ─────────────────────────────────────────────────────────────────
   const $ = (id) => document.getElementById(id);
   const app = $("app");
   let currentMode = "brainstorm";
-  let ws, ctx, stream, node, ready = false, live = false, busy = false;
-  let playhead = 0; const sources = new Set();
-  // One user bubble per turn: the API finalizes a `transcript.user` at every sentence
-  // pause, but they're all the same turn until the agent replies — so we accumulate.
-  let userTurnEl = null, userCommitted = "", agentTurnEl = null;
-  let contextItems = [];   // facts the agent has "remembered" this session
+  let aaiKey = "", anthropicKey = "", cartesiaKey = "";
+  let micCtx, playCtx, stream, node, sttWs, connectTimer = null;
+  let live = false, busy = false, sttReady = false, speaking = false, ttsOk = true;
+  let history = [];               // Claude messages: alternating user/assistant, starting with user
+  let llmAbort = null, ttsAbort = null;
+  let ttsSources = new Set(), playhead = 0;
+  let epoch = 0;                  // bumped on every turn / barge-in; stale async work checks it
+  let lastAgentReply = "";        // used to spot the coach transcribing its own voice
+  // STT turn tracking
+  let liveUserEl = null, lastTurnOrder = -1, triggeredOrder = -1;
+  let contextItems = [];
+
+  const setHint = (t) => { $("footHint").textContent = t || ""; };
 
   // ── UI state ────────────────────────────────────────────────────────────
   const STATES = {
@@ -379,21 +402,16 @@ If this is the start, ask what they want to brainstorm, then dig in. If you just
     if (target === currentMode) return;
     currentMode = target;
     app.dataset.mode = target;
-    document.querySelectorAll(".segment").forEach(s =>
-      s.classList.toggle("is-active", s.dataset.target === target));
+    document.querySelectorAll(".segment").forEach(s => s.classList.toggle("is-active", s.dataset.target === target));
     $("heroMode").textContent = MODES[target].label.toUpperCase();
-    if (live && ready && ws && ws.readyState === 1) {
-      // system_prompt is mutable mid-session; resend only that field.
-      ws.send(JSON.stringify({ type: "session.update", session: { system_prompt: promptFor(target) } }));
-      addTurn("system", "Switched to " + MODES[target].name);
-    }
+    if (live) addTurn("system", "Switched to " + MODES[target].name);   // next Claude reply uses the new prompt
   }
 
-  // ── Transcript ──────────────────────────────────────────────────────────
+  // ── Transcript helpers ────────────────────────────────────────────────────
   const TYPING = '<span class="typing"><i></i><i></i><i></i></span>';
   function setBubbleText(turn, text) {
     const b = turn.querySelector(".bubble");
-    if (text) b.textContent = text; else b.innerHTML = TYPING;   // empty → animated typing dots
+    if (text) b.textContent = text; else b.innerHTML = TYPING;
     turn.classList.toggle("pending", !text);
   }
   function addTurn(role, text) {
@@ -415,31 +433,13 @@ If this is the start, ask what they want to brainstorm, then dig in. If you just
     t.scrollTop = t.scrollHeight;
     return turn;
   }
-  function ensureUserTurn() { if (!userTurnEl) userTurnEl = addTurn("user", ""); }   // bubble appears immediately
-  function renderUserBubble(partial) {
-    ensureUserTurn();
-    const text = (userCommitted + (partial ? " " + partial : "")).trim();
-    setBubbleText(userTurnEl, text);
-    userTurnEl.classList.toggle("partial", !!partial && !!text);
-    $("transcript").scrollTop = $("transcript").scrollHeight;
-  }
-  function onUserDelta(text) { renderUserBubble(text); }            // live, mid-turn
-  function onUserFinal(text) {                                      // one finalized segment
-    userCommitted = (userCommitted + " " + (text || "")).trim();
-    renderUserBubble("");
-    const target = detectSwitch(userCommitted, currentMode);
-    if (target) setMode(target);
-  }
-  function endUserTurn() {
-    if (userTurnEl && !userCommitted) userTurnEl.remove();   // drop an empty "you" placeholder (false start / no speech)
-    userTurnEl = null; userCommitted = "";
-  }
+  const scrollTranscript = () => { const t = $("transcript"); t.scrollTop = t.scrollHeight; };
 
-  // ── Context panel (the agent's "remembered" facts) ───────────────────────
+  // ── Context panel (out-of-band fact extraction) ──────────────────────────
   function addContext(arg) {
-    const fact = (arg.fact || "").trim();
+    const fact = (arg && arg.fact || "").trim();
     if (!fact) return;
-    if (contextItems.some(i => i.fact.toLowerCase() === fact.toLowerCase())) return;  // skip dupes
+    if (contextItems.some(i => i.fact.toLowerCase() === fact.toLowerCase())) return;
     contextItems.push({ fact, category: arg.category || "profile" });
     renderContext();
   }
@@ -460,120 +460,360 @@ If this is the start, ask what they want to brainstorm, then dig in. If you just
     list.lastChild.scrollIntoView({ block: "nearest" });
   }
 
-  // ── Audio playback (PCM16 @ 24k) with barge-in flush ─────────────────────
-  function play(b64) {
-    const raw = atob(b64), pcm = new Int16Array(raw.length / 2);
-    for (let i = 0; i < pcm.length; i++) pcm[i] = raw.charCodeAt(2*i) | (raw.charCodeAt(2*i+1) << 8);
-    const buf = ctx.createBuffer(1, pcm.length, RATE), ch = buf.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
-    const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
-    const at = Math.max(ctx.currentTime, playhead); src.start(at); playhead = at + buf.duration;
-    sources.add(src); src.onended = () => sources.delete(src);
-  }
-  function flush() {
-    for (const s of sources) { try { s.onended = null; s.stop(); } catch (e) {} }
-    sources.clear(); playhead = ctx ? ctx.currentTime : 0;
-  }
-
-  // ── Session lifecycle ────────────────────────────────────────────────────
-  function sessionConfig(mode) {
-    return { system_prompt: promptFor(mode), greeting: MODES[mode].greeting,
-             output: { voice: VOICE }, input: { turn_detection: TURN_DETECTION }, tools: [REMEMBER_TOOL] };
-  }
-
+  // ════════════════════════════════════════════════════════════════════════
+  //  1) SPEECH-TO-TEXT  — AssemblyAI Universal Streaming v3
+  // ════════════════════════════════════════════════════════════════════════
+  // Accumulate ~100 ms per frame before posting — AssemblyAI streaming requires 50–1000 ms
+  // chunks (a raw render quantum is only ~8 ms and gets rejected).
   const WORKLET =
-    "class P extends AudioWorkletProcessor{process(i){const c=i[0][0];" +
-    "if(c){const b=new Int16Array(c.length);for(let n=0;n<c.length;n++)" +
-    "b[n]=Math.max(-1,Math.min(1,c[n]))*32767;this.port.postMessage(b.buffer,[b.buffer]);}" +
+    "class P extends AudioWorkletProcessor{" +
+    "constructor(){super();this._buf=[];this._n=0;this._target=Math.floor(sampleRate*0.1);}" +
+    "process(i){const c=i[0][0];" +
+    "if(c){const b=new Int16Array(c.length);" +
+    "for(let n=0;n<c.length;n++)b[n]=Math.max(-1,Math.min(1,c[n]))*32767;" +
+    "this._buf.push(b);this._n+=b.length;" +
+    "if(this._n>=this._target){const out=new Int16Array(this._n);let o=0;" +
+    "for(const p of this._buf){out.set(p,o);o+=p.length;}" +
+    "this.port.postMessage(out.buffer,[out.buffer]);this._buf=[];this._n=0;}}" +
     "return true;}}registerProcessor('cap',P);";
 
-  async function start() {
-    const key = $("key").value.trim();
-    if (!key) { openSettings(); $("key").focus(); return; }
-    busy = true; setState("connecting");
-    contextItems = []; renderContext();   // fresh memory each session
+  function sttUrl() {
+    const p = new URLSearchParams({
+      token: aaiKey,                         // raw key works as the browser token (local-demo path)
+      sample_rate: String(micCtx.sampleRate),
+      encoding: "pcm_s16le",
+      format_turns: "true",
+      speech_model: SPEECH_MODEL,
+      voice_focus: VOICE_FOCUS,
+      min_turn_silence: String(MIN_TURN_SILENCE),
+      max_turn_silence: String(MAX_TURN_SILENCE),
+    });
+    if (KEYTERMS.length) p.set("keyterms_prompt", JSON.stringify(KEYTERMS));
+    return AAI_WS + "?" + p.toString();
+  }
+
+  function onSttMessage({ data }) {
+    if (!live) return;                                   // ignore frames queued before Stop
+    let m; try { m = JSON.parse(data); } catch { return; }
+    if (m.type === "Begin") { clearTimeout(connectTimer); sttReady = true; setState("listening"); greet(); return; }
+    if (m.type === "Error") { setHint("AssemblyAI: " + (m.error || m.error_code)); return; }
+    if (m.type === "Turn") { onTurn(m); return; }
+    // Termination → handled by onclose
+  }
+
+  let pendingFinalTimer = null;
+  function onTurn(m) {
+    const text = (m.transcript || "").trim();
+    if (!text) return;
+
+    // Barge-in only on genuinely NEW user speech (not the trailing formatted frame of the turn we
+    // just answered), and only while the coach is producing output.
+    if ((speaking || llmAbort) && m.turn_order !== triggeredOrder) bargeIn();
+
+    if (m.turn_order !== lastTurnOrder) {     // a new user turn started
+      lastTurnOrder = m.turn_order;
+      liveUserEl = addTurn("user", "");
+    }
+    if (liveUserEl) { setBubbleText(liveUserEl, text); liveUserEl.classList.add("partial"); scrollTranscript(); }
+
+    if (m.end_of_turn && m.turn_order !== triggeredOrder) {
+      // With format_turns on, an unformatted end_of_turn comes first, then a formatted one for the
+      // same turn_order. Finalize on the formatted text (email/punctuation), but never hang waiting.
+      if (m.turn_is_formatted || !FORMAT_TURNS) { clearTimeout(pendingFinalTimer); finalizeTurn(m.turn_order, text); }
+      else { clearTimeout(pendingFinalTimer); const o = m.turn_order, t = text; pendingFinalTimer = setTimeout(() => finalizeTurn(o, t), 700); }
+    }
+  }
+  function finalizeTurn(order, text) {
+    if (order === triggeredOrder) return;   // formatted turn already beat the fallback timer
+    triggeredOrder = order;
+    const finalEl = liveUserEl; liveUserEl = null;
+    if (finalEl) { setBubbleText(finalEl, text); finalEl.classList.remove("partial"); }
+    if (isSelfEcho(text)) { if (finalEl) finalEl.remove(); return; }   // coach's own voice — don't loop
+    const target = detectSwitch(text, currentMode);
+    if (target) setMode(target);
+    respond(text);
+  }
+
+  // Guard against weak echo-cancellation transcribing the coach's own voice as a user turn.
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter(Boolean);
+  function isSelfEcho(text) {
+    if (!lastAgentReply) return false;
+    const words = norm(text);
+    if (words.length < 3) return false;
+    const spoken = new Set(norm(lastAgentReply));
+    let hit = 0; for (const w of words) if (spoken.has(w)) hit++;
+    return hit / words.length > 0.6;          // most "user" words are the coach's → it's an echo
+  }
+
+  // Prime the STT model with the coach's last question (the agent_context demo):
+  // a mumbled "user at gmail dot com" then resolves to user@gmail.com.
+  function setAgentContext(text) {
+    if (sttWs && sttWs.readyState === 1)
+      try { sttWs.send(JSON.stringify({ type: "UpdateConfiguration", agent_context: text.slice(0, 600) })); } catch {}
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  //  2) THE BRAIN  — Claude (streamed, browser-direct)
+  // ════════════════════════════════════════════════════════════════════════
+  const anthropicHeaders = () => ({
+    "x-api-key": anthropicKey,
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+    "content-type": "application/json",
+  });
+
+  async function streamClaude(messages, bubbleEl, signal) {
+    const res = await fetch(ANTHROPIC_URL, {
+      method: "POST", signal, headers: anthropicHeaders(),
+      body: JSON.stringify({ model: LLM_MODEL, max_tokens: REPLY_MAX_TOKENS, system: systemFor(currentMode), messages, stream: true }),
+    });
+    if (!res.ok) throw new Error("Claude " + res.status + ": " + (await res.text().catch(() => "")).slice(0, 200));
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "", full = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {
+          full += ev.delta.text;
+          if (bubbleEl) { setBubbleText(bubbleEl, full); scrollTranscript(); }
+        }
+      }
+    }
+    return full;
+  }
+
+  // One full turn: user said `userText` → Claude replies (streamed) → speak it.
+  async function respond(userText) {
+    const my = ++epoch;
+    const mark = history.length;
+    history.push({ role: "user", content: userText });
+    setState("speaking");
+    const el = addTurn("agent", "");
+    const myLlm = llmAbort = new AbortController();
+    let reply = "";
     try {
-      ctx = new AudioContext({ sampleRate: RATE });
+      reply = await streamClaude(history, el, myLlm.signal);
+    } catch (e) {
+      if (llmAbort === myLlm) llmAbort = null;
+      history.length = mark;                                  // roll back the speculative user turn
+      if (e.name === "AbortError") el.remove();               // barged in
+      else { setBubbleText(el, "I had trouble reaching Claude."); setHint(e.message); }
+      if (my === epoch && live) setState("listening");
+      return;
+    }
+    if (llmAbort === myLlm) llmAbort = null;
+    reply = reply.trim();
+    if (!reply) { history.length = mark; el.remove(); if (my === epoch && live) setState("listening"); return; }
+    history.push({ role: "assistant", content: reply });
+    lastAgentReply = reply;
+    setAgentContext(reply);             // prime STT for the next user turn (the agent_context demo)
+    extractContext(userText, reply);    // fire-and-forget Context panel update
+    await speak(reply, my);
+    if (my === epoch && live && !speaking) setState("listening");
+  }
+
+  // The coach opens the conversation (display + voice only; not in Claude history,
+  // because the Anthropic messages array must start with a user turn).
+  async function greet() {
+    const my = ++epoch;
+    const g = MODES[currentMode].greeting;
+    addTurn("agent", g);
+    lastAgentReply = g;
+    setAgentContext(g);
+    await speak(g, my);
+    if (my === epoch && live && !speaking) setState("listening");
+  }
+
+  // ── Context extraction (out-of-band; never blocks the voice loop) ────────
+  async function extractContext(userText, agentText) {
+    try {
+      const known = contextItems.map(i => i.fact).join(" | ");
+      const res = await fetch(ANTHROPIC_URL, {
+        method: "POST", headers: anthropicHeaders(),
+        body: JSON.stringify({
+          model: EXTRACT_MODEL, max_tokens: 400,
+          system: 'Extract durable facts from a coaching conversation for a sidebar. Return ONLY JSON: {"facts":[{"fact":"short third-person fact","category":"profile|idea|constraint|risk|decision|question"}]}. Include only NEW concrete facts (situations, numbers, goals, constraints, decisions, open questions) not already known. If nothing new, return {"facts":[]}. No prose.',
+          messages: [{ role: "user", content: `Already known: ${known || "(none)"}\n\nUser said: ${userText}\nCoach said: ${agentText}\n\nNew durable facts as JSON:` }],
+        }),
+      });
+      if (!res.ok) return;
+      const j = await res.json();
+      const txt = (j.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+      const a = txt.indexOf("{"), b = txt.lastIndexOf("}");
+      if (a < 0 || b < 0) return;
+      const parsed = JSON.parse(txt.slice(a, b + 1));
+      (parsed.facts || []).forEach(addContext);
+    } catch { /* non-fatal */ }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  //  3) THE VOICE  — Cartesia streaming TTS into WebAudio (gapless)
+  // ════════════════════════════════════════════════════════════════════════
+  async function speak(text, my) {
+    if (!text.trim()) return;
+    speaking = true; setState("speaking");
+    const myAbort = ttsAbort = new AbortController();
+    try { await playCtx.resume(); } catch {}
+    let played = false;
+    if (ttsOk) played = await speakCartesia(text, myAbort);
+    if (!played && my === epoch && speaking) await speakBrowser(text);   // fallback (barge-in bumps epoch)
+    if (my === epoch) { speaking = false; if (ttsAbort === myAbort) ttsAbort = null; }
+  }
+
+  async function speakCartesia(text, myAbort) {
+    let res;
+    try {
+      res = await fetch("https://api.cartesia.ai/tts/bytes", {
+        method: "POST", signal: myAbort.signal,
+        headers: {
+          "Authorization": "Bearer " + cartesiaKey,
+          "Cartesia-Version": CARTESIA_VERSION,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model_id: CARTESIA_MODEL,
+          transcript: text,
+          voice: { mode: "id", id: CARTESIA_VOICE },
+          output_format: { container: "raw", encoding: "pcm_f32le", sample_rate: TTS_RATE },
+        }),
+      });
+    } catch { return false; }   // aborted (barge-in) or network error → caller falls back to browser voice
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      if (res.status === 401) { ttsOk = false; setHint("Cartesia rejected the key — check it in Settings. Using the browser voice."); }
+      else if (res.status === 402 || res.status === 429) setHint("Cartesia quota/rate limit — using the browser voice this turn.");
+      else setHint("Cartesia " + res.status + ": " + t.slice(0, 120));
+      return false;
+    }
+    if (!playCtx) return false;
+
+    // Cartesia returns raw 32-bit float little-endian mono PCM @ 24 kHz — drops straight into WebAudio.
+    let f32; try { f32 = new Float32Array(await res.arrayBuffer()); } catch { return false; }
+    if (!f32.length || myAbort.signal.aborted || !playCtx) return false;
+    const ab = playCtx.createBuffer(1, f32.length, TTS_RATE);
+    ab.copyToChannel(f32, 0);
+    const src = playCtx.createBufferSource(); src.buffer = ab; src.connect(playCtx.destination);
+    ttsSources.add(src);
+    await new Promise((resolve) => {           // resolve when it finishes, or when barge-in stops it
+      let done = false;
+      const finish = () => { if (done) return; done = true; ttsSources.delete(src); resolve(); };
+      src.onended = finish;
+      myAbort.signal.addEventListener("abort", () => { try { src.stop(); } catch {} finish(); }, { once: true });
+      try { src.start(); } catch { finish(); }
+    });
+    return true;
+  }
+
+  // Free fallback voice (browser TTS) when Cartesia isn't reachable (no key / network).
+  // Pick the most natural voice the browser offers — Chrome's "Google" voices sound best.
+  let browserVoice = null;
+  function loadBrowserVoice() {
+    const vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+    if (!vs.length) return;
+    const en = vs.filter(v => /^en/i.test(v.lang));
+    browserVoice =
+      en.find(v => /google/i.test(v.name)) ||
+      en.find(v => /samantha|ava|zoe|premium|natural|neural|siri/i.test(v.name)) ||
+      en.find(v => /en[-_]US/i.test(v.lang)) ||
+      en[0] || vs[0] || null;
+  }
+  loadBrowserVoice();
+  try { window.speechSynthesis.addEventListener("voiceschanged", loadBrowserVoice); } catch {}
+  function speakBrowser(text) {
+    return new Promise((resolve) => {
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        if (browserVoice) u.voice = browserVoice;
+        u.rate = 1.05;
+        u.onend = () => resolve(); u.onerror = () => resolve();
+        window.speechSynthesis.speak(u);
+      } catch { resolve(); }
+    });
+  }
+
+  function bargeIn() {
+    epoch++;                                              // invalidate any in-flight reply/speak
+    if (llmAbort) { try { llmAbort.abort(); } catch {} llmAbort = null; }
+    if (ttsAbort) { try { ttsAbort.abort(); } catch {} ttsAbort = null; }
+    try { window.speechSynthesis.cancel(); } catch {}    // also stop the browser fallback voice
+    for (const s of ttsSources) { try { s.onended = null; s.stop(); s.disconnect(); } catch {} }
+    ttsSources.clear();
+    if (playCtx) playhead = playCtx.currentTime;
+    speaking = false;
+    setState("listening", "You're talking");
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  //  Session lifecycle
+  // ════════════════════════════════════════════════════════════════════════
+  async function start() {
+    aaiKey = $("aaiKey").value.trim();
+    anthropicKey = $("anthropicKey").value.trim();
+    cartesiaKey = $("cartesiaKey").value.trim();
+    if (!aaiKey || !anthropicKey || !cartesiaKey) {
+      openSettings();
+      setHint("Add all three API keys in Settings (the gear icon).");
+      (!aaiKey ? $("aaiKey") : !anthropicKey ? $("anthropicKey") : $("cartesiaKey")).focus();
+      return;
+    }
+    busy = true; setState("connecting"); setHint("");
+    history = []; contextItems = []; renderContext();
+    lastTurnOrder = -1; triggeredOrder = -1; liveUserEl = null; sttReady = false; speaking = false;
+    ttsOk = true; lastAgentReply = ""; clearTimeout(pendingFinalTimer);
+    try {
+      micCtx = new AudioContext({ sampleRate: 16000 });   // honoured by Chrome/Edge; we pass the real rate anyway
+      playCtx = new AudioContext({ sampleRate: TTS_RATE });
+      await playCtx.resume();
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true },
       });
-      await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
-      node = new AudioWorkletNode(ctx, "cap");
-      ctx.createMediaStreamSource(stream).connect(node);
+      const workletUrl = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
+      try { await micCtx.audioWorklet.addModule(workletUrl); } finally { URL.revokeObjectURL(workletUrl); }
+      node = new AudioWorkletNode(micCtx, "cap");
+      micCtx.createMediaStreamSource(stream).connect(node);
 
-      const url = new URL("wss://agents.assemblyai.com/v1/ws");
-      url.searchParams.set("token", key);
-      ws = new WebSocket(url);
+      sttWs = new WebSocket(sttUrl());
+      sttWs.binaryType = "arraybuffer";
       live = true; busy = false;
 
-      ws.onopen = () => ws.send(JSON.stringify({ type: "session.update", session: sessionConfig(currentMode) }));
-      node.port.onmessage = (e) => {
-        if (!ready || !ws || ws.readyState !== 1) return;
-        const b = new Uint8Array(e.data); let s = "";
-        for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
-        ws.send(JSON.stringify({ type: "input.audio", audio: btoa(s) }));
+      node.port.onmessage = (e) => {                       // raw binary PCM16 frames up to STT
+        if (sttReady && sttWs && sttWs.readyState === 1) sttWs.send(e.data);
       };
-      ws.onmessage = onMessage;
-      ws.onerror = () => { $("footHint").textContent = "Connection error — check your key, and use Chrome or Edge."; };
-      ws.onclose = () => teardown();
+      sttWs.onmessage = onSttMessage;
+      sttWs.onerror = () => setHint("Speech connection error — check your AssemblyAI key; use Chrome or Edge.");
+      sttWs.onclose = () => { if (live) { teardown(); setHint("Speech connection closed — tap the mic to start again."); } };
+
+      connectTimer = setTimeout(() => {                    // never sit on "Connecting…" forever
+        if (live && !sttReady) { teardown(); setHint("Couldn't reach AssemblyAI — check your key and network."); }
+      }, 8000);
     } catch (err) {
       busy = false; live = false; setState("offline");
-      $("footHint").textContent = "Mic blocked or unavailable: " + (err && err.message ? err.message : err);
-    }
-  }
-
-  function onMessage({ data }) {
-    const m = JSON.parse(data);
-    switch (m.type) {
-      case "session.ready":
-        ready = true; playhead = ctx.currentTime; setState("listening"); break;
-      case "input.speech.started":
-        flush(); ensureUserTurn(); setState("listening", "You're talking"); break;   // barge-in + show we're hearing you
-      case "transcript.user.delta":
-        onUserDelta(m.text || ""); break;
-      case "transcript.user":
-        onUserFinal(m.text || ""); break;
-      case "reply.started":
-        endUserTurn(); setState("speaking");
-        agentTurnEl = addTurn("agent", "");   // bubble appears (typing) the moment the agent starts speaking
-        break;
-      case "reply.audio":
-        play(m.data); break;
-      case "transcript.agent":
-        // The API delivers the agent's text in one piece (no word-level deltas), so we drop it
-        // into the bubble that's been showing the typing indicator while it spoke.
-        if (agentTurnEl) setBubbleText(agentTurnEl, m.text || "");
-        else addTurn("agent", m.text || "");
-        break;
-      case "reply.done":
-        if (m.status === "interrupted") flush();
-        if (agentTurnEl && agentTurnEl.classList.contains("pending")) agentTurnEl.remove();  // cut off before any text
-        agentTurnEl = null;
-        if (live) setState("listening");
-        break;
-      case "tool.call":
-        if (m.name === "remember") addContext(m.arguments || {});   // arguments is already an object
-        // Ack immediately. result must be a JSON string; echo the original call_id.
-        if (ws && ws.readyState === 1)
-          ws.send(JSON.stringify({ type: "tool.result", call_id: m.call_id, result: JSON.stringify({ ok: true }) }));
-        break;
-      case "session.error":
-      case "error":
-        $("footHint").textContent = "Error: " + (m.message || m.code || "unknown");
-        break;
+      setHint("Mic blocked or unavailable: " + (err && err.message ? err.message : err));
     }
   }
 
   function stop() {
-    try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "session.end" })); } catch (e) {}
-    if (ws) try { ws.close(); } catch (e) {}
+    try { if (sttWs && sttWs.readyState === 1) sttWs.send(JSON.stringify({ type: "Terminate" })); } catch {}
+    if (sttWs) try { sttWs.close(); } catch {}
     teardown();
   }
   function teardown() {
-    ready = false; live = false; busy = false;
+    live = false; busy = false; sttReady = false;
+    clearTimeout(connectTimer); clearTimeout(pendingFinalTimer);
+    bargeIn();
+    if (sttWs) { try { sttWs.onmessage = sttWs.onclose = sttWs.onerror = null; } catch {} sttWs = null; }
+    if (node) { try { node.port.onmessage = null; node.disconnect(); } catch {} node = null; }
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-    if (ctx) { try { ctx.close(); } catch (e) {} ctx = null; }
-    sources.clear(); userTurnEl = null; userCommitted = ""; agentTurnEl = null;
+    if (micCtx) { try { micCtx.close(); } catch {} micCtx = null; }
+    if (playCtx) { try { playCtx.close(); } catch {} playCtx = null; }
+    liveUserEl = null;
     setState("offline");
   }
 
@@ -581,13 +821,13 @@ If this is the start, ask what they want to brainstorm, then dig in. If you just
   function openSettings() { $("settings").hidden = false; }
   $("settingsBtn").onclick = () => { $("settings").hidden = !$("settings").hidden; };
   $("micBtn").onclick = () => { if (busy) return; live ? stop() : start(); };
-  document.querySelectorAll(".segment").forEach(s => {
-    s.onclick = () => setMode(s.dataset.target);
-  });
+  document.querySelectorAll(".segment").forEach(s => { s.onclick = () => setMode(s.dataset.target); });
 
-  // Remember the key locally for convenience (same security caveat as in settings).
-  const saved = localStorage.getItem("aai_key"); if (saved) $("key").value = saved;
-  $("key").addEventListener("change", () => localStorage.setItem("aai_key", $("key").value.trim()));
+  // Remember keys locally for convenience (same caveat as in Settings).
+  [["aaiKey", "aai_key"], ["anthropicKey", "anthropic_key"], ["cartesiaKey", "cartesia_key"]].forEach(([id, ls]) => {
+    const v = localStorage.getItem(ls); if (v) $(id).value = v;
+    $(id).addEventListener("change", () => localStorage.setItem(ls, $(id).value.trim()));
+  });
 
   setState("offline");
 })();
